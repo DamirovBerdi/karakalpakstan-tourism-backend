@@ -232,6 +232,51 @@ app.post('/api/track', async (req, res) => {
   }
 });
 
+// 5. Supabase Proxy Endpoint (Hides Supabase domain completely from browser DevTools)
+app.use('/supabase', async (req, res) => {
+  try {
+    const supabaseBaseUrl = (process.env.SUPABASE_URL || 'https://ythdfltgdvfjllgyutnz.supabase.co').replace(/\/$/, '');
+    const targetUrl = `${supabaseBaseUrl}${req.url}`;
+
+    const headers = {};
+    for (const [key, val] of Object.entries(req.headers)) {
+      if (!['host', 'referer', 'origin'].includes(key.toLowerCase())) {
+        headers[key] = val;
+      }
+    }
+
+    if (!headers.apikey && process.env.SUPABASE_ANON_KEY) {
+      headers.apikey = process.env.SUPABASE_ANON_KEY;
+      headers.authorization = `Bearer ${process.env.SUPABASE_ANON_KEY}`;
+    }
+
+    const fetchOpts = {
+      method: req.method,
+      headers,
+    };
+
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.body) {
+      fetchOpts.body = typeof req.body === 'string' || Buffer.isBuffer(req.body)
+        ? req.body
+        : JSON.stringify(req.body);
+    }
+
+    const proxyRes = await fetch(targetUrl, fetchOpts);
+    res.status(proxyRes.status);
+    
+    proxyRes.headers.forEach((val, key) => {
+      if (!['transfer-encoding', 'content-encoding', 'content-length'].includes(key.toLowerCase())) {
+        res.setHeader(key, val);
+      }
+    });
+
+    const buffer = await proxyRes.arrayBuffer();
+    return res.send(Buffer.from(buffer));
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Supabase proxy error' });
+  }
+});
+
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`🚀 Karakalpakstan Tourism Backend Server listening on port ${PORT}`);
