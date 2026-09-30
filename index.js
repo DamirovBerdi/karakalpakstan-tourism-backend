@@ -1,11 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import compression from 'compression';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Enable gzip/brotli response compression for ultra-fast transfers
+app.use(compression());
 
 // Enable CORS for frontend connection
 const allowedOrigins = process.env.FRONTEND_URL 
