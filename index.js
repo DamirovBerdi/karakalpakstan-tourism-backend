@@ -120,30 +120,62 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// 3. Gemini Proxy Endpoint (supporting user keys passed from frontend)
+// 3. Gemini Proxy Endpoint (Hides keys completely from client DevTools)
 app.post('/api/gemini', async (req, res) => {
   try {
-    const { contents, systemInstruction, model } = req.body;
-    const clientKey = req.headers['x-user-gemini-key'] || req.body.userKey || process.env.GEMINI_API_KEY_1;
+    const { contents, systemInstruction, model, generationConfig } = req.body;
+    
+    // Pool of server keys
+    const serverKeys = [
+      process.env.GEMINI_API_KEY_1,
+      process.env.GEMINI_API_KEY_2,
+      process.env.GEMINI_API_KEY_3,
+      process.env.GEMINI_API_KEY_4
+    ].filter(Boolean);
 
-    if (!clientKey) {
-      return res.status(400).json({ error: 'Gemini API key not provided' });
+    // Client provided key (if set in UI settings) or server keys
+    const clientKey = req.headers['x-user-gemini-key'] || req.body.userKey;
+    const keysToTry = clientKey ? [clientKey, ...serverKeys] : serverKeys;
+
+    if (keysToTry.length === 0) {
+      return res.status(400).json({ error: 'No Gemini API keys configured on backend or provided by client' });
     }
 
     const targetModel = model || 'gemini-1.5-flash';
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${clientKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents, systemInstruction })
-    });
+    const payload = { contents };
+    if (systemInstruction) payload.systemInstruction = systemInstruction;
+    if (generationConfig) payload.generationConfig = generationConfig;
 
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(response.status).json({ error: errText });
+    let lastError = null;
+    for (const key of keysToTry) {
+      try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${key}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key
+          },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.status === 429 || response.status === 403) {
+          lastError = await response.text();
+          continue; // Try next key in pool
+        }
+
+        if (!response.ok) {
+          const errText = await response.text();
+          return res.status(response.status).json({ error: errText });
+        }
+
+        const data = await response.json();
+        return res.json(data);
+      } catch (err) {
+        lastError = err.message;
+      }
     }
 
-    const data = await response.json();
-    return res.json(data);
+    return res.status(502).json({ error: `All Gemini keys exhausted: ${lastError}` });
   } catch (error) {
     return res.status(500).json({ error: error.message || 'Gemini proxy error' });
   }
